@@ -46,7 +46,7 @@
 #include <vector>
 #include <fstream>
 #include <sstream>
-#include <algorithm> 
+#include <algorithm>
 #include <cctype>
 #include <locale>
 #include <iterator>
@@ -171,23 +171,24 @@ avtGMSHFileFormat::PopulateDatabaseMetaData(avtDatabaseMetaData *md)
 {
   //
   // CODE TO ADD A MESH
+
+  std::string meshname = "/data/airfoil_exterior.msh";
   //
-  // string meshname = ...
-  //
+  // Type de maillage :
   // AVT_RECTILINEAR_MESH, AVT_CURVILINEAR_MESH, AVT_UNSTRUCTURED_MESH,
   // AVT_POINT_MESH, AVT_SURFACE_MESH, AVT_UNKNOWN_MESH
-  // avtMeshType mt = AVT_RECTILINEAR_MESH;
-  //
-  // int nblocks = 1;  <-- this must be 1 for STSD
-  // int block_origin = 0;
-  // int spatial_dimension = 2;
-  // int topological_dimension = 2;
-  // double *extents = NULL;
+  avtMeshType mt = AVT_UNSTRUCTURED_MESH;
+
+  int nblocks = 1; //  <-- this must be 1 for STSD
+  int block_origin = 0;
+  int spatial_dimension = 3;
+  int topological_dimension = 3;
+  double *extents = NULL;
   //
   // Here's the call that tells the meta-data object that we have a mesh:
   //
-  // AddMeshToMetaData(md, meshname, mt, extents, nblocks, block_origin,
-  //                   spatial_dimension, topological_dimension);
+  AddMeshToMetaData(md, meshname, mt, extents, nblocks, block_origin,
+                     spatial_dimension, topological_dimension);
   //
 
   //
@@ -205,7 +206,10 @@ avtGMSHFileFormat::PopulateDatabaseMetaData(avtDatabaseMetaData *md)
   // AddScalarVarToMetaData(md, varname, mesh_for_this_var, cent);
   //
 }
-
+// Adding info about a mesh to avtDatabaseMetaData p107 :
+// Create object avtMeshMetaData, populate important members
+// and Add it to avtDatabaseMetaData
+// Mesh -> name, spatial_dimension, topological_dimension and mesh type
 
 // ****************************************************************************
 //  Method: avtGMSHFileFormat::GetMesh
@@ -231,7 +235,7 @@ avtGMSHFileFormat::GetMesh(const char *meshname)
   if (!ins) {
     EXCEPTION1(InvalidDBTypeException, "Can't open file.");
   }
-
+  // Stockage du fichier dans m_data
   std::string line;
   while (std::getline(ins, line)) {
     trim(line);
@@ -239,16 +243,18 @@ avtGMSHFileFormat::GetMesh(const char *meshname)
   }
 
   ins.close();
-  
+
   // TODO:
   // Lire les coordonnées des noeuds (entre les balises $Nodes et $EndNodes).
   std::vector<std::string>::iterator nodes_start_it = std::find(m_data.begin(), m_data.end(), "$Nodes");
   int nodes_index = std::distance(m_data.begin(), nodes_start_it);
-  int nnodes = std::stoi(m_data[nodes_index + 1]);
-  int nodes_start_index = nodes_index + 2;
+  // Number of nodes in the mesh
+  int nnodes = std::stoi(m_data[nodes_index + 1]); // convert string to integer
+  int nodes_start_index = nodes_index + 2; // index first node
   std::vector<std::string>::iterator nodes_end_it = std::find(m_data.begin(), m_data.end(), "$EndNodes");
-  int nodes_end_index = std::distance(m_data.begin(), nodes_end_it);
+  int nodes_end_index = std::distance(m_data.begin(), nodes_end_it); // index tag "$EndNodes"
 
+  // Remplissage des vecteurs x, y et z
   std::vector<double> x, y, z;
   for (int i = nodes_start_index; i < nodes_end_index; ++i) {
     std::vector<std::string> toks_vertices = split(m_data[i]);
@@ -260,34 +266,55 @@ avtGMSHFileFormat::GetMesh(const char *meshname)
   // TODO:
   // Puis utiliser la structure de données VTK appropriée pour les stocker.
 
+  // Create the vtkPoints object and copy points into it.
+  vtkPoints *points = vtkPoints::New();
+
+  points->SetNumberOfPoints(nnodes);
+  for (int i = 0; i < nnodes; ++i) {
+    points->SetPoint(i, x[i], y[i], z[i]);
+  }
+
   // TODO:
   // Initialiser un maillage non structuré à partir de cette dernière structure.
-    
+  // Type de maillage : vtkStructuredGrid, vtkUnstructuredGrid, vtkPolyData
+
+  vtkUnstructuredGrid* grid = vtkUnstructuredGrid::New();
+  grid->SetPoints(points);
+  points->Delete();
+
+  grid -> Allocate(nnodes);
+
+
+
   // TODO:
   // Lire les éléments (triangles et tetrahèdres) entre les balises $Elements et $EndElements.
   std::vector<std::string>::iterator elements_start_it =
     std::find(m_data.begin(), m_data.end(), "$Elements");
   int elements_index = std::distance(m_data.begin(), elements_start_it);
-  int elements_data_start_index = elements_index + 2;
+  int elements_data_start_index = elements_index + 2; // index first element
   std::vector<std::string>::iterator elements_end_it = std::find(m_data.begin(), m_data.end(), "$EndElements");
   int elements_end_index = std::distance(m_data.begin(), elements_end_it);
 
   // elements_data : element_id, cell_ids, ...
   std::vector<std::vector<int>> elements_data;
-  
+
   for (int i = elements_data_start_index; i < elements_end_index; ++i) {
     std::vector<std::string> toks_elms = split(m_data[i]);
+
     // Ajout des triangles et tetrahedres.
-    std::vector<int> elm;
+    std::vector<int> elm, elm_var;
     int nb = toks_elms.size();
 
+    // Boucle triangles
     if (toks_elms[1] == "2") {
       elm.push_back(2);
       elm.push_back(std::stoi(toks_elms[nb-3])-1);
       elm.push_back(std::stoi(toks_elms[nb-2])-1);
       elm.push_back(std::stoi(toks_elms[nb-1])-1);
       elements_data.push_back(elm);
-    } else if (toks_elms[1] == "4") {
+    }
+    // Boucle tetrahedres
+    else if (toks_elms[1] == "4") {
       elm.push_back(4);
       elm.push_back(std::stoi(toks_elms[nb-4])-1);
       elm.push_back(std::stoi(toks_elms[nb-3])-1);
@@ -296,14 +323,38 @@ avtGMSHFileFormat::GetMesh(const char *meshname)
       elements_data.push_back(elm);
     }
   }
-  
+
   // TODO:
   // Allouer l'espace mémoire utilisé par le maillage en fonction du nombre de cellules.
+  grid->Allocate(elements_data.size());
 
   // TODO:
   // Utiliser la structure de données VTK appropriée pour stocker les éléments du maillage.
-  
-  return nullptr;
+  int nb_tri = 0;
+  int nb_tet = 0;
+
+  vtkIdList * Ids= vtkIdList::New();
+  for(auto& elm : elements_data){
+    if(elm[0]==2){
+      nb_tri++;
+      Ids -> SetNumberOfIds(3);
+      Ids->SetId(0,elm[1]);
+      Ids->SetId(1,elm[2]);
+      Ids->SetId(2,elm[3]);
+      grid->InsertNextCell(VTK_TRIANGLE, Ids);
+    }
+    if(elm[0]==4){
+      nb_tri++;
+      Ids -> SetNumberOfIds(4);
+      Ids->SetId(0,elm[1]);
+      Ids->SetId(1,elm[2]);
+      Ids->SetId(2,elm[3]);
+      Ids->SetId(3,elm[4]);
+      grid->InsertNextCell(VTK_TETRA, Ids);
+    }
+  }
+
+  return grid;
 }
 
 // ****************************************************************************
@@ -325,8 +376,6 @@ avtGMSHFileFormat::GetMesh(const char *meshname)
 vtkDataArray *
 avtGMSHFileFormat::GetVar(const char *varname)
 {
-  return nullptr;
-
   //
   // If you have a file format where variables don't apply (for example a
   // strictly polygonal format like the STL (Stereo Lithography) format,
@@ -338,15 +387,44 @@ avtGMSHFileFormat::GetVar(const char *varname)
   //
   // If you do have a scalar variable, here is some code that may be helpful.
   //
-  // int ntuples = XXX; // this is the number of entries in the variable.
-  // vtkFloatArray *rv = vtkFloatArray::New();
-  // rv->SetNumberOfTuples(ntuples);
-  // for (int i = 0 ; i < ntuples ; i++)
-  // {
-  //      rv->SetTuple1(i, VAL);  // you must determine value for ith entry.
-  // }
+
+  std::vector<std::string>::iterator elements_start_it =
+    std::find(m_data.begin(), m_data.end(), "$Elements");
+
+  int elements_index = std::distance(m_data.begin(), elements_start_it);
+  int elements_start_index = elements_index + 2;
+
+  std::vector<std::string>::iterator elements_end_it = std::find(m_data.begin(), m_data.end(), "$EndElements");
+  int elements_end_index = std::distance(m_data.begin(), elements_end_it);
+
+  int tag_index = 0;
+
+  if(strcmp(varname, "var_1") == 0) {
+    tag_index = 3;
+  }
+  if(strcmp(varname, "var_2") == 0) {
+    tag_index = 4;
+  }
+
+  std::vector<int> tags;
+
+  for (int i = elements_start_index; i < elements_end_index; ++i) {
+    std::vector<std::string> tokens = split(m_data[i]);
+
+    if(tokens[1] == "2" || tokens[1] == "4") {
+      tags.push_back( std::stod(tokens[tag_index]) );
+    }
+  }
+
+  int ntuples = tags.size(); // this is the number of entries in the variable.
+  vtkFloatArray *rv = vtkFloatArray::New();
+  rv->SetNumberOfTuples(ntuples);
+  for (int i = 0 ; i < ntuples ; i++)
+  {
+      rv->SetTuple1(i, tags[i]);  // you must determine value for ith entry.
+  }
   //
-  // return rv;
+  return rv;
   //
 }
 
@@ -371,7 +449,7 @@ vtkDataArray *
 avtGMSHFileFormat::GetVectorVar(const char *varname)
 {
   return nullptr;
-  
+
   //
   // If you have a file format where variables don't apply (for example a
   // strictly polygonal format like the STL (Stereo Lithography) format,
@@ -397,7 +475,7 @@ avtGMSHFileFormat::GetVectorVar(const char *varname)
   //           one_entry[j] = ...
   //      for (j = ncomps ; j < ucomps ; j++)
   //           one_entry[j] = 0.;
-  //      rv->SetTuple(i, one_entry); 
+  //      rv->SetTuple(i, one_entry);
   // }
   //
   // delete [] one_entry;
